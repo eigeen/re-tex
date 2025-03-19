@@ -5,22 +5,20 @@ use gdeflate::sys;
 
 use crate::macros::BitField as _;
 
-// type DecompressionResult<T> = Result<T, DecompressionError>;
-
-// #[derive(Debug, Clone, Copy, thiserror::Error)]
-// pub enum DecompressionError {
-//     #[error("Bad data.")]
-//     BadData,
-//     #[error("Insufficient space.")]
-//     InsufficientSpace,
-// }
-
 type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("IO error: {0}")]
     IO(#[from] std::io::Error),
+    #[error("Decompression error: {0}")]
+    Decompression(#[from] DecompressionError),
+    #[error("Compression error: {0}")]
+    Compression(#[from] CompressionError),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DecompressionError {
     #[error("Bad data.")]
     BadData,
     #[error("Decompressor creation failed.")]
@@ -29,6 +27,14 @@ pub enum Error {
     DecompressionFailed,
     #[error("Insufficient space.")]
     InsufficientSpace,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CompressionError {
+    #[error("Compressor creation failed.")]
+    CompressorCreationFailed,
+    #[error("Compression failed.")]
+    CompressionFailed,
 }
 
 // partial from https://github.com/c-ola/libdeflater
@@ -101,7 +107,7 @@ impl GDfDecompressor {
     pub fn new() -> Result<GDfDecompressor> {
         let decompressor = unsafe { sys::libdeflate_alloc_gdeflate_decompressor() };
         if decompressor.is_null() {
-            Err(Error::DecompressorCreationFailed)
+            Err(DecompressionError::DecompressorCreationFailed)?
         } else {
             Ok(Self(decompressor))
         }
@@ -110,7 +116,7 @@ impl GDfDecompressor {
     pub fn decompress(&mut self, in_data: &[u8]) -> Result<Vec<u8>> {
         let tile_stream = TileStream::from(&mut io::Cursor::new(in_data))?;
         if !tile_stream.is_valid() {
-            return Err(Error::BadData);
+            return Err(DecompressionError::BadData)?;
         }
         let uncompressed_size = tile_stream.get_uncompressed_size();
 
@@ -156,10 +162,10 @@ impl GDfDecompressor {
                 match decomp_result {
                     sys::libdeflate_result_LIBDEFLATE_SUCCESS => bytes_read += out_nbytes,
                     sys::libdeflate_result_LIBDEFLATE_BAD_DATA => {
-                        return Err(Error::BadData);
+                        return Err(DecompressionError::BadData)?;
                     }
                     sys::libdeflate_result_LIBDEFLATE_INSUFFICIENT_SPACE => {
-                        return Err(Error::InsufficientSpace);
+                        return Err(DecompressionError::InsufficientSpace)?;
                     }
                     _ => {
                         panic!(
@@ -178,6 +184,31 @@ impl Drop for GDfDecompressor {
     fn drop(&mut self) {
         unsafe {
             sys::libdeflate_free_gdeflate_decompressor(self.0);
+        }
+    }
+}
+
+pub struct GDfCompressor(*mut sys::libdeflate_gdeflate_compressor);
+
+impl GDfCompressor {
+    pub fn new(level: gdeflate::CompressionLevel) -> Result<GDfCompressor> {
+        let compressor = unsafe { sys::libdeflate_alloc_gdeflate_compressor(level as i32) };
+        if compressor.is_null() {
+            Err(CompressionError::CompressorCreationFailed)?
+        } else {
+            Ok(Self(compressor))
+        }
+    }
+
+    pub fn compress(&mut self, in_data: &[u8]) -> Result<Vec<u8>> {
+        unimplemented!()
+    }
+}
+
+impl Drop for GDfCompressor {
+    fn drop(&mut self) {
+        unsafe {
+            sys::libdeflate_free_gdeflate_compressor(self.0);
         }
     }
 }
