@@ -6,6 +6,13 @@ pub enum Error {
     IO(#[from] std::io::Error),
     #[error("GDeFlate error: {0}")]
     GDeflate(#[from] crate::gdf::Error),
+    #[error("DDS error: {0}")]
+    Dds(#[from] ddsfile::Error),
+
+    #[cfg(feature = "image")]
+    #[error("Create image from DDS error: {0}")]
+    CreateImageDds(#[from] image_dds::error::CreateImageError),
+
     #[error("Not a Tex file.")]
     NotTexFile,
     #[error("Internal error: {0}")]

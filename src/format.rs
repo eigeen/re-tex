@@ -1,19 +1,6 @@
 use strum::FromRepr;
 
 #[derive(Debug, Clone)]
-pub struct FormatData {
-    tx: u32,
-    ty: u32,
-    bit_length: u32,
-    byte_length: u32,
-    format_family: TexFormatFamily,
-}
-
-impl FormatData {
-    // pub fn new(format: TexFormat) -> Self {}
-}
-
-#[derive(Debug, Clone)]
 pub enum TexFormatFamily {
     Astc {
         typeless: bool,
@@ -261,27 +248,7 @@ impl TexFormat {
 
 #[cfg(test)]
 mod tests {
-    // use regex::Regex;
-    // use strum::IntoEnumIterator as _;
-
     use super::*;
-
-    // #[ignore]
-    // #[test]
-    // fn generate_format_data() {
-    //     let astc_re = Regex::new(r#"(ASTC)([0-9]+)X([0-9]+)(.*)"#).unwrap();
-    //     let bc_re = Regex::new(r#"(BC[0-9]+H?)(.*)"#).unwrap();
-    //     let rgb_re = Regex::new(r#"([RGBAX][0-9]+)?" * 5 + "(.*)"#).unwrap();
-
-    //     let mut format_datas = Vec::new();
-    //     for format in TexFormat::iter() {
-    //         let format_str: &str = format.into();
-    //         let astc = astc_re.captures(format_str);
-    //         if let Some(astc) = astc {
-    //             astc.get(0)
-    //         }
-    //     }
-    // }
 
     #[test]
     fn test_is_type() {

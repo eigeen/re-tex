@@ -1,14 +1,15 @@
 use std::borrow::Cow;
 use std::io::{self, Write as _};
 
-use better_default::Default;
 use byteorder::{LE, ReadBytesExt, WriteBytesExt};
+use ddsfile::{AlphaMode, D3D10ResourceDimension, Dds, DxgiFormat, NewDxgiParams};
+use num_traits::FromPrimitive;
 
 use crate::error::{Error, Result};
 use crate::format::TexFormat;
 use crate::gdf;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, better_default::Default)]
 pub struct TexHeader {
     pub magic: [u8; 4],
     pub version: u32,
@@ -351,6 +352,61 @@ impl Tex {
         }
         Ok(())
     }
+
+    pub fn to_dds(&self, mipmap_count: usize) -> Result<Dds> {
+        if mipmap_count > self.mip_datas.len() {
+            return Err(Error::Internal("mipmap_count is out of range".to_string()));
+        }
+
+        // TODO: swizzle
+        let mipmaps = &self.mip_datas[0..mipmap_count];
+
+        let mut dds = Dds::new_dxgi(NewDxgiParams {
+            height: self.header.height as u32,
+            width: self.header.width as u32,
+            depth: Some(self.header.depth as u32),
+            format: DxgiFormat::from_u32(self.header.format as u32).unwrap(),
+            mipmap_levels: Some(mipmap_count as u32),
+            array_layers: None,
+            caps2: None,
+            is_cubemap: self.header.cubemap_marker != 0,
+            resource_dimension: D3D10ResourceDimension::Texture2D,
+            alpha_mode: AlphaMode::Unknown,
+        })?;
+
+        // decompress if needed
+        let has_compressed = mipmaps.iter().any(|mip_data| mip_data.is_compressed());
+        let mut decompressor = if has_compressed {
+            Some(gdf::GDfDecompressor::new()?)
+        } else {
+            None
+        };
+
+        let mut data: Vec<u8> = Vec::new();
+        for mip_data in mipmaps {
+            if mip_data.is_compressed() {
+                data.extend(mip_data.uncompressed_data(decompressor.as_mut())?.as_ref());
+            } else {
+                data.extend(mip_data.texture_data.as_slice());
+            }
+        }
+        dds.data = data;
+
+        Ok(dds)
+    }
+
+    /// Convert to Image struct.
+    #[cfg(feature = "image")]
+    pub fn to_rgba_image(&self, mipmap_idx: usize) -> Result<image::RgbaImage> {
+        if mipmap_idx >= self.mip_datas.len() {
+            return Err(Error::Internal("mipmap_idx is out of range".to_string()));
+        }
+
+        let dds = self.to_dds(mipmap_idx + 1)?;
+        let rgba_image = image_dds::image_from_dds(&dds, mipmap_idx as u32)?;
+
+        Ok(rgba_image)
+    }
 }
 
 #[cfg(test)]
@@ -407,5 +463,25 @@ mod tests {
         let mut reader = std::io::Cursor::new(bytes);
         let tex = Tex::from_reader(&mut reader).unwrap();
         eprintln!("{:#?}", tex);
+    }
+
+    #[test]
+    fn test_tex_to_dds() {
+        let mut data = std::fs::read("test_files/ch04_000_0000_1001_ALBD.tex.241106027").unwrap();
+        let mut reader = std::io::Cursor::new(&mut data);
+        let tex = Tex::from_reader(&mut reader).unwrap();
+        tex.to_dds(tex.header.mipmap_count as usize).unwrap();
+    }
+
+    #[cfg(feature = "image")]
+    #[test]
+    fn test_tex_to_rgba_image() {
+        let mut data = std::fs::read("test_files/ch04_000_0000_1001_ALBD.tex.241106027").unwrap();
+        let mut reader = std::io::Cursor::new(&mut data);
+        let tex = Tex::from_reader(&mut reader).unwrap();
+        let image = tex.to_rgba_image(0).unwrap();
+        image
+            .save("test_files/ch04_000_0000_1001_ALBD.png")
+            .unwrap();
     }
 }
