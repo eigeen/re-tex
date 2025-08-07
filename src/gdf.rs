@@ -1,3 +1,7 @@
+//! GDeflate compression and decompression.
+//!
+//! Reference: https://github.com/microsoft/DirectStorage/blob/main/GDeflate/GDeflate/GDeflateCompress.cpp
+
 use std::io;
 
 use byteorder::{LE, ReadBytesExt};
@@ -121,7 +125,7 @@ impl GDfDecompressor {
         let uncompressed_size = tile_stream.get_uncompressed_size();
 
         let mut out_data = vec![0u8; uncompressed_size];
-        let mut bytes_read = 0;
+        let mut _bytes_read = 0;
 
         unsafe {
             let tile_offsets = in_data.as_ptr().add(size_of::<u64>()) as *const u32;
@@ -160,7 +164,7 @@ impl GDfDecompressor {
                 )
                     as sys::libdeflate_result;
                 match decomp_result {
-                    sys::libdeflate_result_LIBDEFLATE_SUCCESS => bytes_read += out_nbytes,
+                    sys::libdeflate_result_LIBDEFLATE_SUCCESS => _bytes_read += out_nbytes,
                     sys::libdeflate_result_LIBDEFLATE_BAD_DATA => {
                         return Err(DecompressionError::BadData)?;
                     }
@@ -188,6 +192,13 @@ impl Drop for GDfDecompressor {
     }
 }
 
+struct CompressionContext {
+    input_ptr: &'static [u8],
+    input_size: usize,
+    tiles: Vec<Vec<u8>>,
+    num_items: u32,
+}
+
 pub struct GDfCompressor(*mut sys::libdeflate_gdeflate_compressor);
 
 impl GDfCompressor {
@@ -200,8 +211,106 @@ impl GDfCompressor {
         }
     }
 
+    fn compress_tile(&mut self, input: &[u8]) -> Result<Vec<u8>> {
+        let mut page_count = 0;
+        let scratch_size = unsafe {
+            sys::libdeflate_gdeflate_compress_bound(self.0, input.len(), &mut page_count)
+        };
+        assert_eq!(page_count, 1);
+
+        let mut scratch_buffer = vec![0u8; scratch_size];
+        let mut compressed_page = sys::libdeflate_gdeflate_out_page {
+            data: scratch_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+            nbytes: scratch_size,
+        };
+
+        let result = unsafe {
+            sys::libdeflate_gdeflate_compress(
+                self.0,
+                input.as_ptr() as *const std::ffi::c_void,
+                input.len(),
+                &mut compressed_page,
+                1,
+            )
+        };
+
+        if result == 0 {
+            Err(CompressionError::CompressionFailed)?
+        }
+
+        let compressed_data = unsafe {
+            std::slice::from_raw_parts(compressed_page.data as *const u8, compressed_page.nbytes)
+                .to_vec()
+        };
+
+        Ok(compressed_data)
+    }
+
     pub fn compress(&mut self, in_data: &[u8]) -> Result<Vec<u8>> {
-        unimplemented!()
+        if in_data.is_empty() {
+            return Err(CompressionError::CompressionFailed)?;
+        }
+
+        let num_items = in_data.len().div_ceil(KDEFAULT_TILE_SIZE) as u32;
+        let mut tiles = Vec::with_capacity(num_items as usize);
+
+        // 压缩每个tile
+        for tile_index in 0..num_items {
+            let tile_pos = tile_index as usize * KDEFAULT_TILE_SIZE;
+            let remaining = in_data.len() - tile_pos;
+            let uncompressed_size = std::cmp::min(remaining, KDEFAULT_TILE_SIZE);
+
+            let tile_data = &in_data[tile_pos..tile_pos + uncompressed_size];
+            let compressed_tile = self.compress_tile(tile_data)?;
+            tiles.push(compressed_tile);
+        }
+
+        // 准备输出流
+        let mut tile_ptrs = Vec::with_capacity(num_items as usize);
+        let mut data_pos = 0;
+
+        for tile in &tiles {
+            tile_ptrs.push(data_pos as u32);
+            data_pos += tile.len();
+        }
+
+        // tile_ptrs[0]用于存储最后一个tile的大小
+        if !tile_ptrs.is_empty() {
+            let last_tile_size = tiles.last().unwrap().len();
+            tile_ptrs[0] = last_tile_size as u32;
+        }
+
+        // 计算未压缩大小
+        let header = TileStream::new(in_data.len());
+
+        // 组装输出数据
+        let mut output = Vec::new();
+
+        // 写入header
+        output.extend_from_slice(&[header.id]);
+        output.extend_from_slice(&[header.magic]);
+        output.extend_from_slice(&header.num_tiles.to_le_bytes());
+
+        let flags = (header.tile_size_idx & 0x3)
+            | ((header.last_tile_size & 0x3FFFF) << 2)
+            | ((header.reserv1 & 0xFFF) << 20);
+        output.extend_from_slice(&flags.to_le_bytes());
+
+        // 写入tile偏移表
+        for ptr in &tile_ptrs {
+            output.extend_from_slice(&ptr.to_le_bytes());
+        }
+
+        // 写入压缩数据
+        for (i, tile) in tiles.iter().enumerate() {
+            let tile_offset = if i == 0 { 0 } else { tile_ptrs[i] as usize };
+            while output.len() < tile_offset {
+                output.push(0);
+            }
+            output.extend_from_slice(tile);
+        }
+
+        Ok(output)
     }
 }
 
