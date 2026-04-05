@@ -15,6 +15,8 @@ pub enum Error {
 
     #[error("Not a Tex file.")]
     NotTexFile,
+    #[error("Invalid Tex data: {0}")]
+    InvalidTexData(String),
     #[error("Internal error: {0}")]
     Internal(String),
     #[error("Unimplemented: {0}")]

@@ -209,7 +209,7 @@ impl MipData {
     pub fn uncompressed_data(
         &self,
         decompressor: Option<&mut gdf::GDfDecompressor>,
-    ) -> Result<Cow<Vec<u8>>> {
+    ) -> Result<Cow<'_, Vec<u8>>> {
         if self.is_gdeflate {
             // let mut decompressor = gdf::GDfDecompressor::new()?;
             let decompressor = if let Some(decompressor) = decompressor {
@@ -265,15 +265,30 @@ impl Tex {
 
         // read mipmap data
         let mut mipmaps = Vec::with_capacity((header.tex_count * header.mipmap_count) as usize);
-        for (mip_entry, compression_info) in mip_entries.iter().zip(compression_infos.iter()) {
+        for (idx, (mip_entry, compression_info)) in
+            mip_entries.iter().zip(compression_infos.iter()).enumerate()
+        {
             let start = compression_info.compressed_offset as usize;
-            let end = start + compression_info.compressed_size as usize;
+            let size = compression_info.compressed_size as usize;
+            let end = start.checked_add(size).ok_or_else(|| {
+                Error::InvalidTexData(format!(
+                    "Mipmap {idx} compressed range overflow: offset={start}, size={size}",
+                ))
+            })?;
             let padding = if header.swizzle_control != 1 {
                 0
             } else {
                 mip_entry.uncompressed_size - mip_entry.scanline_length
             };
-            let mut mip_data = data[start..end].to_vec();
+            let mut mip_data = data
+                .get(start..end)
+                .ok_or_else(|| {
+                    Error::InvalidTexData(format!(
+                        "Mipmap {idx} compressed range out of bounds: offset={start}, size={size}, data_len={}",
+                        data.len(),
+                    ))
+                })?
+                .to_vec();
             if padding > 0 {
                 mip_data.extend(vec![0u8; padding as usize]);
             }
@@ -418,6 +433,7 @@ mod tests {
 
     const TEST_FILE_GDF: &str = "test_files/ch04_000_0000_1002_MB.tex.241106027";
     const TEST_FILE_NO_GDF: &str = "test_files/uncompress_ch04_000_0000_1001_ALBD.tex.241106027";
+    const TEST_FILE_LEGACY: &str = "test_files/s_menu_iam.tex.34";
 
     #[test]
     fn test_parse_tex() {
@@ -433,6 +449,14 @@ mod tests {
         let mut reader = std::io::Cursor::new(data);
         let tex = Tex::from_reader(&mut reader).unwrap();
         eprintln!("{:#?}", tex);
+    }
+
+    #[test]
+    fn test_parse_tex_legacy() {
+        let data = std::fs::read(TEST_FILE_LEGACY).unwrap();
+        let mut reader = std::io::Cursor::new(data);
+        let err = Tex::from_reader(&mut reader).unwrap_err();
+        assert!(matches!(err, crate::error::Error::InvalidTexData(_)));
     }
 
     #[test]
