@@ -1,1 +1,4 @@
 /target
+*.exe
+/test_files
+/dev_docs

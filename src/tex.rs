@@ -353,6 +353,9 @@ impl Tex {
         Ok(())
     }
 
+    /// Convert to DDS file.
+    ///
+    /// `mipmap_count` is the number of mipmaps to convert.
     pub fn to_dds(&self, mipmap_count: usize) -> Result<Dds> {
         if mipmap_count > self.mip_datas.len() {
             return Err(Error::Internal("mipmap_count is out of range".to_string()));
